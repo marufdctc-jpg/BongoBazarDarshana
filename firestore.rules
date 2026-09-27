@@ -1,0 +1,119 @@
+// ==========================================
+// বঙ্গ বাজার দর্শনা - Firestore Security Rules
+// ==========================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUserSelf(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isShopMember(shopId) {
+      return isAuthenticated() && (
+        request.auth.uid in get(/databases/$(database)/documents/shops/$(shopId)).data.members
+      );
+    }
+
+    function isShopOwner(shopId) {
+      return isAuthenticated() && (
+        request.auth.uid == get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId
+      );
+    }
+
+    function isShopManager(shopId) {
+      return isShopMember(shopId) && (
+        getUserData().role in ['owner', 'manager']
+      );
+    }
+
+    // 1. ইউজার প্রোফাইল কালেকশন
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // নতুন ইউজার রেজিস্টার করতে পারবে অথবা নিজের ডেটা আপডেট করতে পারবে
+      allow create: if isAuthenticated();
+      allow update: if isUserSelf(userId) || (
+        isAuthenticated() && isShopOwner(resource.data.shopId)
+      );
+      allow delete: if isShopOwner(resource.data.shopId);
+    }
+
+    // 2. দোকান মূল কালেকশন
+    match /shops/{shopId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isShopOwner(shopId) || isShopManager(shopId);
+      allow delete: if isShopOwner(shopId);
+
+      // পণ্য (Products)
+      match /products/{productId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopManager(shopId) || isShopOwner(shopId);
+        allow update: if isShopManager(shopId) || isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId);
+      }
+
+      // বিক্রি (Sales)
+      match /sales/{saleId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update: if isShopManager(shopId) || isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId) || isShopManager(shopId);
+      }
+
+      // কাস্টমার (Customers)
+      match /customers/{customerId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update: if isShopManager(shopId) || isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId);
+
+        match /payments/{paymentId} {
+          allow read: if isShopMember(shopId);
+          allow write: if isShopManager(shopId) || isShopOwner(shopId);
+        }
+      }
+
+      // খরচ (Expenses)
+      match /expenses/{expenseId} {
+        allow read: if isShopManager(shopId) || isShopOwner(shopId);
+        allow create: if isShopManager(shopId) || isShopOwner(shopId);
+        allow update: if isShopManager(shopId) || isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId);
+      }
+
+      // মাল কেনা (Purchases)
+      match /purchases/{purchaseId} {
+        allow read: if isShopManager(shopId) || isShopOwner(shopId);
+        allow create: if isShopManager(shopId) || isShopOwner(shopId);
+        allow update: if isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId);
+      }
+
+      // কার্যকলাপ অডিট লগ (Activity Logs)
+      match /activityLogs/{logId} {
+        allow read: if isShopOwner(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false; // অডিট লগ এডিট বা ডিলিট করা নিষেধ
+      }
+
+      // নোটিফিকেশন (Notifications)
+      match /notifications/{notifId} {
+        allow read: if isShopOwner(shopId);
+        allow create: if isAuthenticated();
+        allow update: if isShopOwner(shopId);
+        allow delete: if isShopOwner(shopId);
+      }
+    }
+  }
+}
